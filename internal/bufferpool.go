@@ -32,6 +32,22 @@ type BufferPoolManager struct {
 	dir      string
 }
 
+func NewBufferPool(dir string) *BufferPoolManager {
+	newPool := BufferPoolManager{
+		slots:    [MAXPOOLSIZE]*InternalPage{},
+		freelist: make([]int, MAXPOOLSIZE),
+		mx:       sync.Mutex{},
+		pagemx:   sync.RWMutex{},
+		dir:      dir,
+	}
+	for i := 0; i < MAXPOOLSIZE; i++ {
+		newPool.freelist[i] = i
+	}
+
+	return &newPool
+
+}
+
 func (b *BufferPoolManager) FetchPage(pageid PageID) *InternalPage {
 	b.pagemx.RLock()
 	defer b.pagemx.RUnlock()
@@ -126,7 +142,8 @@ func (b *BufferPoolManager) DeletePage(pageid PageID) {
 	b.pagemx.Unlock()
 }
 
-func (b *BufferPoolManager) InsertData(pageid PageID, data [][]byte) error {
+// return last page modified
+func (b *BufferPoolManager) InsertData(pageid PageID, data [][]byte) (uint64, error) {
 	b.mx.Lock()
 	defer b.mx.Unlock()
 
@@ -135,26 +152,28 @@ func (b *BufferPoolManager) InsertData(pageid PageID, data [][]byte) error {
 
 	f, err := os.OpenFile(filepath.Join(b.dir, pageid.tableName, ".db"), os.O_WRONLY, 0666)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	rowNums := binary.LittleEndian.Uint16(buf[0:2])
-	//checksum := buf[2:18]
+	//numberOfPage := binary.LittleEndian.Uint64(buf[0:8])
+	rowNums := binary.LittleEndian.Uint16(buf[8:10])
+	//checksum := buf[10:26]
 
-	offset := 18 + int(rowNums)*len(data[0])
+	offset := 26 + int(rowNums)*len(data[0])
 	rows := 0
 	pgNum := pageid.pageNum
 	for i := range data {
 		if offset+len(data[0]) > PAGESIZE {
 			//create new page and write old page
-			binary.LittleEndian.PutUint16(buf[0:2], uint16(rows)+rowNums)
-			checksum := md5.Sum(buf[18:])
-			copy(buf[2:18], checksum[:])
+			binary.LittleEndian.PutUint64(buf[0:8], pgNum)
+			binary.LittleEndian.PutUint16(buf[8:10], uint16(rows)+rowNums)
+			checksum := md5.Sum(buf[26:])
+			copy(buf[10:26], checksum[:])
 
 			f.Seek(int64(pgNum)*PAGESIZE, 0)
 			_, err = f.Write(buf[:])
 			if err != nil {
-				return err
+				return 0, err
 			}
 			rows = 0
 			pgNum += 1
@@ -173,15 +192,15 @@ func (b *BufferPoolManager) InsertData(pageid PageID, data [][]byte) error {
 	f.Seek(int64(pageid.pageNum)*PAGESIZE, 0)
 	_, err = f.Write(buf[:])
 	if err != nil {
-		return err
+		return 0, err
 	}
 	err = f.Sync()
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	//remove page from bufferpool so next calls read page again (fix later)
 	b.DeletePage(pageid)
 
-	return nil
+	return pgNum, err
 }

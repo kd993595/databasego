@@ -16,6 +16,7 @@ type Table struct {
 	Name          string
 	lastRowId     int64
 	rowEmptyBytes uint64
+	lastPage      uint64
 }
 
 /*

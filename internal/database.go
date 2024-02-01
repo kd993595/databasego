@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"crypto/md5"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -12,9 +13,10 @@ import (
 )
 
 type Backend struct {
-	dir      string
-	mainFile *os.File
-	tables   []Table
+	dir        string
+	mainFile   *os.File
+	tables     []Table
+	bufferPool *BufferPoolManager
 }
 
 func CreateNewDatabase(dir string) *Backend {
@@ -32,11 +34,11 @@ func CreateNewDatabase(dir string) *Backend {
 	if err != nil {
 		panic(err)
 	}
-	return &Backend{dir: dir, mainFile: f, tables: make([]Table, 0)}
+	return &Backend{dir: dir, mainFile: f, tables: make([]Table, 0), bufferPool: NewBufferPool(dir)}
 }
 
 func OpenExistingDatabase(dir string) (*Backend, error) {
-	b := Backend{dir: dir}
+	b := Backend{dir: dir, bufferPool: NewBufferPool(dir)}
 
 	f, err := os.Open(filepath.Join(dir, "main.db"))
 	if os.IsNotExist(err) {
@@ -79,11 +81,50 @@ func OpenExistingDatabase(dir string) (*Backend, error) {
 		b.tables = append(b.tables, tmpTable)
 	}
 
-	for _, tab := range b.tables { //debugging table info
-		fmt.Println(tab.ToString())
+	for i, tab := range b.tables {
+		fmt.Println(tab.ToString()) //debugging table info
+		n, m, err := b.GetTableParams(tab)
+		if err != nil {
+			return nil, err
+		}
+		b.tables[i].lastPage = n
+		b.tables[i].lastRowId = m
 	}
 
 	return &b, nil
+}
+
+func (b *Backend) GetTableParams(table Table) (uint64, int64, error) {
+	tabledir := filepath.Join(b.dir, table.Name, ".db")
+	f, err := os.Open(tabledir)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, 0, err
+	}
+	lastPage := fi.Size()/PAGESIZE - 1
+	f.Seek(lastPage*PAGESIZE, 0)
+	buf := [PAGESIZE]byte{}
+	_, err = f.Read(buf[:])
+	if err != nil {
+		return 0, 0, err
+	}
+	rowNums := binary.LittleEndian.Uint16(buf[8:10])
+	offset := 26 + rowNums*uint16(table.GenerateRowBytes())
+	columnBits := InitializeBitSet(uint64(len(table.Columns)))
+	offset += uint16(columnBits.Size())
+	for _, col := range table.Columns {
+		if col.columnConstraint == COL_ROWID {
+			break
+		} else {
+			offset += uint16(col.columnSize)
+		}
+	}
+	rowid := binary.LittleEndian.Uint64(buf[offset : offset+8])
+	return uint64(lastPage), int64(rowid), nil
 }
 
 func (b *Backend) CreateTable(q Query) error {
@@ -227,11 +268,23 @@ func (b *Backend) CreateTable(q Query) error {
 		return errors.New("CREATE: must have exactly one primary field")
 	}
 
-	_, err := os.Create(filepath.Join(b.dir, fmt.Sprintf("%s.db", newtable.Name)))
+	f, err := os.Create(filepath.Join(b.dir, fmt.Sprintf("%s.db", newtable.Name)))
 	if err != nil {
 		return err
 	}
 
+	buf := [PAGESIZE]byte{}
+	binary.LittleEndian.PutUint64(buf[0:8], 0)  //pagenum
+	binary.LittleEndian.PutUint16(buf[8:10], 0) //rownums
+	checksum := md5.Sum(buf[26:])
+	copy(buf[10:26], checksum[:])
+	_, err = f.Write(buf[:])
+	if err != nil {
+		return err
+	}
+
+	newtable.lastPage = 0
+	newtable.lastRowId = 0
 	b.tables = append(b.tables, newtable)
 	b.writeTablesToDisk()
 	return nil
@@ -251,7 +304,8 @@ func (b *Backend) Insert(q Query) error { //use md5 for checksum
 	}
 
 	allrows := make([][]byte, 0)
-
+	pageid := PageID{tableName: tableToInsert.Name, pageNum: tableToInsert.lastPage}
+	lastrownum := 0
 	for _, val := range q.Inserts {
 		nullColumns := InitializeBitSet(uint64(len(tableToInsert.Columns)))
 		rowInsert := make([]byte, tableToInsert.GenerateRowBytes()+nullColumns.Size())
@@ -263,6 +317,13 @@ func (b *Backend) Insert(q Query) error { //use md5 for checksum
 			for i := 0; i < len(val); i++ {
 				if col.columnName != val[i] {
 					continue
+				}
+				if col.columnConstraint == COL_ROWID {
+					n, err := strconv.Atoi(val[i])
+					if err != nil {
+						return errors.Join(errors.New("Insert Query failed: "), err)
+					}
+					lastrownum = n
 				}
 				var b []byte = make([]byte, 0)
 				switch col.columnType {
@@ -300,11 +361,12 @@ func (b *Backend) Insert(q Query) error { //use md5 for checksum
 			}
 			if previous == columnsAdded {
 				//no columns added
-				if col.columnType == COL_ROWID {
+				if col.columnConstraint == COL_ROWID {
 					n := tableToInsert.lastRowId + 1
 					b := make([]byte, 8)
 					binary.LittleEndian.PutUint64(b, uint64(n))
 					copy(rowInsert[byteIndex:byteIndex+uint64(col.columnSize)], b)
+					lastrownum = int(n)
 				} else {
 					nullColumns.setBit(j)
 				}
@@ -313,11 +375,21 @@ func (b *Backend) Insert(q Query) error { //use md5 for checksum
 		}
 		copy(rowInsert[0:], nullColumns.bytes)
 		if columnsAdded != len(val) {
-			return errors.New("At Insert: columns given some may not exist failed insert")
+			return errors.New("at Insert: columns given some may not exist failed insert")
 		}
 		allrows = append(allrows, rowInsert)
 	}
 
+	n, err := b.bufferPool.InsertData(pageid, allrows)
+	if err != nil {
+		return err
+	}
+	for i := range b.tables {
+		if q.TableName == b.tables[i].Name {
+			b.tables[i].lastPage = n
+			b.tables[i].lastRowId = int64(lastrownum)
+		}
+	}
 	return nil
 }
 
