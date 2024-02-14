@@ -74,7 +74,8 @@ func (c *Conn) Query(query string, args []driver.Value) (driver.Rows, error) {
 	case Create:
 		err := c.db.CreateTable(ast)
 		return nil, err
-
+	case Select:
+		return nil, nil
 	default:
 		return nil, errors.ErrUnsupported
 	}
@@ -89,11 +90,11 @@ Result from sql select statement in driver query
 type Rows struct {
 	columns []string //should be result column holding name and type
 	index   uint64
-	rows    [][]interface{}
+	rows    [][]Cell //holds all the values returned from the queries which is slice of array of bytes
 }
 
 func (r *Rows) Columns() []string {
-	return nil
+	return r.columns
 }
 
 func (r *Rows) Close() error {

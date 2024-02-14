@@ -1,7 +1,9 @@
 package internal
 
 import (
+	"bytes"
 	"crypto/md5"
+	"database/sql/driver"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 type Backend struct {
@@ -128,9 +131,9 @@ func (b *Backend) GetTableParams(table Table) (uint64, int64, error) {
 }
 
 func (b *Backend) CreateTable(q Query) error {
-	exists := b.checkTableExist(q)
+	_, exists := b.checkTableExist(q)
 	if exists {
-		return errors.New("Table name already exists")
+		return errors.New("Table already exist")
 	}
 	newtable := Table{lastRowId: 0}
 	newtable.Name = q.TableName
@@ -291,16 +294,9 @@ func (b *Backend) CreateTable(q Query) error {
 }
 
 func (b *Backend) Insert(q Query) error { //use md5 for checksum
-	exists := b.checkTableExist(q)
-	if !exists {
+	tableToInsert, ok := b.checkTableExist(q)
+	if !ok {
 		return errors.New("Table does not exist")
-	}
-
-	var tableToInsert Table
-	for i := range b.tables {
-		if q.TableName == b.tables[i].Name {
-			tableToInsert = b.tables[i]
-		}
 	}
 
 	allrows := make([][]byte, 0)
@@ -393,13 +389,13 @@ func (b *Backend) Insert(q Query) error { //use md5 for checksum
 	return nil
 }
 
-func (b *Backend) checkTableExist(q Query) bool {
+func (b *Backend) checkTableExist(q Query) (Table, bool) {
 	for i := range b.tables {
 		if q.TableName == b.tables[i].Name {
-			return true
+			return b.tables[i], true
 		}
 	}
-	return false
+	return Table{}, false
 }
 
 func (b *Backend) writeTablesToDisk() {
@@ -421,4 +417,65 @@ func (b *Backend) writeTablesToDisk() {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func (b *Backend) Select(q Query) (driver.Rows, error) {
+	tmpTable, ok := b.checkTableExist(q)
+	if !ok {
+		return nil, errors.New("Table does not exist")
+	}
+
+	columnsRequest := []Column{}
+	bitsetsize := (len(tmpTable.Columns) + 8 - 1) / 8
+	tmpcol := q.Fields
+	if tmpcol[0] == "*" {
+		columnsRequest = append(columnsRequest, tmpTable.Columns...)
+	} else {
+		for _, col := range tmpTable.Columns {
+			for i, str := range tmpcol {
+				if col.columnName == str {
+					columnsRequest = append(columnsRequest, col)
+					tmpcol = removeColField(tmpcol, i)
+					continue
+				}
+			}
+		}
+		if len(tmpcol) != 0 {
+			return nil, fmt.Errorf("Columns not in table: %s", strings.Join(tmpcol, " "))
+		}
+	}
+
+	rows := Rows{index: 0, columns: []string{}}
+	for _, col := range columnsRequest {
+		rows.columns = append(rows.columns, col.columnName)
+	}
+	rows.rows = make([][]Cell, 0)
+
+	startPage := PageID{tableName: tmpTable.Name, pageNum: 0}
+	endPage := PageID{tableName: tmpTable.Name, pageNum: tmpTable.lastPage}
+	pages := b.bufferPool.SelectDataRange(startPage, endPage)
+
+	for i, page := range pages {
+		if page == nil {
+			return nil, fmt.Errorf("Page %d has been corrupted", i)
+		}
+		rowNums := binary.LittleEndian.Uint16(page.buf[8:10])
+		checksum := page.buf[10:26]
+
+		checksumcheck := md5.Sum(page.buf[26:])
+		if !bytes.Equal(checksum, checksumcheck[:]) {
+			return nil, fmt.Errorf("Page %d has been corrupted", i)
+		}
+		offset := 26
+		for j := 0; j < int(rowNums); j++ {
+
+		}
+	}
+
+	return nil, nil
+}
+
+func removeColField(s []string, i int) []string {
+	s[i] = s[len(s)-1]
+	return s[:len(s)-1]
 }

@@ -185,7 +185,7 @@ func (b *BufferPoolManager) InsertData(pageid PageID, data [][]byte) (uint64, er
 		rows += 1
 	}
 
-	checksum := md5.Sum(buf[18:])
+	checksum := md5.Sum(buf[26:])
 	copy(buf[2:18], checksum[:])
 	binary.LittleEndian.PutUint16(buf[0:2], uint16(rows))
 
@@ -203,4 +203,8 @@ func (b *BufferPoolManager) InsertData(pageid PageID, data [][]byte) (uint64, er
 	b.DeletePage(pageid)
 
 	return pgNum, err
+}
+
+func (b *BufferPoolManager) SelectDataRange(start, end PageID) []*InternalPage {
+	return nil
 }

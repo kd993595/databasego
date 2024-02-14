@@ -29,6 +29,8 @@ type Column struct {
 	columnConstraint uint8
 }
 
+type Cell []byte
+
 const (
 	COL_UNIQUE = iota + 1
 	COL_NOTNULL
