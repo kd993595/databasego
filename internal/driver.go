@@ -75,7 +75,14 @@ func (c *Conn) Query(query string, args []driver.Value) (driver.Rows, error) {
 		err := c.db.CreateTable(ast)
 		return nil, err
 	case Select:
-		return nil, nil
+		rows, err := c.db.Select(ast)
+		if err != nil {
+			return nil, err
+		}
+		return rows, nil
+	case Insert:
+		err := c.db.Insert(ast)
+		return nil, err
 	default:
 		return nil, errors.ErrUnsupported
 	}
@@ -86,6 +93,7 @@ func (c *Conn) Query(query string, args []driver.Value) (driver.Rows, error) {
 
 /*
 Result from sql select statement in driver query
+Must use pointer for interface to be properly implements and allow pointer to struct
 */
 type Rows struct {
 	columns []string //should be result column holding name and type

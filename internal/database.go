@@ -445,11 +445,13 @@ func (b *Backend) Select(q Query) (driver.Rows, error) {
 		}
 	}
 
-	rows := Rows{index: 0, columns: []string{}}
+	rows := &Rows{index: 0, columns: []string{}}
 	for _, col := range columnsRequest {
 		rows.columns = append(rows.columns, col.columnName)
 	}
 	rows.rows = make([][]Cell, 0)
+	rowsize := tmpTable.GenerateRowBytes()
+	rowbitset := InitializeBitSet(uint64(bitsetsize))
 
 	startPage := PageID{tableName: tmpTable.Name, pageNum: 0}
 	endPage := PageID{tableName: tmpTable.Name, pageNum: tmpTable.lastPage}
@@ -457,22 +459,34 @@ func (b *Backend) Select(q Query) (driver.Rows, error) {
 
 	for i, page := range pages {
 		if page == nil {
-			return nil, fmt.Errorf("Page %d has been corrupted", i)
+			return nil, fmt.Errorf("page %d has been corrupted", i)
 		}
 		rowNums := binary.LittleEndian.Uint16(page.buf[8:10])
 		checksum := page.buf[10:26]
 
 		checksumcheck := md5.Sum(page.buf[26:])
 		if !bytes.Equal(checksum, checksumcheck[:]) {
-			return nil, fmt.Errorf("Page %d has been corrupted", i)
+			return nil, fmt.Errorf("page %d has been corrupted", i)
 		}
 		offset := 26
 		for j := 0; j < int(rowNums); j++ {
-
+			row := make([]Cell, len(columnsRequest))
+			tmprow := page.buf[offset : rowsize+uint64(bitsetsize)]
+			rowbitset.fromBytes(tmprow[:bitsetsize])
+			for k, col := range columnsRequest {
+				if rowbitset.hasBit(col.columnIndex) {
+					row[k] = nil
+					continue
+				}
+				celloffset := bitsetsize + col.columnOffset
+				row[k] = tmprow[celloffset : celloffset+int(col.columnSize)]
+			}
+			rows.rows = append(rows.rows, row)
+			offset += int(rowsize) + bitsetsize
 		}
 	}
 
-	return nil, nil
+	return rows, nil
 }
 
 func removeColField(s []string, i int) []string {

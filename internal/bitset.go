@@ -14,6 +14,10 @@ func InitializeBitSet(n uint64) BitSet {
 	return BitSet{make([]byte, (n+8-1)/8)}
 }
 
+func (b *BitSet) fromBytes(x []byte) {
+	b.bytes = x
+}
+
 func (b *BitSet) setBit(pos int) {
 	bytepos := pos / 8
 	if bytepos >= len(b.bytes) {

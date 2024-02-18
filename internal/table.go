@@ -27,6 +27,8 @@ type Column struct {
 	columnType       uint8
 	columnSize       uint8
 	columnConstraint uint8
+	columnOffset     int
+	columnIndex      int
 }
 
 type Cell []byte
@@ -67,6 +69,8 @@ func fromBytes(buf []byte) Table {
 	t.lastRowId = int64(binary.LittleEndian.Uint64(buf[byteIndex : byteIndex+8]))
 	byteIndex += 8
 	t.Columns = make([]Column, 0)
+	offset := 0
+	index := 0
 
 	for byteIndex < len(buf) {
 		newColumn := Column{}
@@ -86,6 +90,10 @@ func fromBytes(buf []byte) Table {
 
 		newColumn.columnName = columnName
 		newColumn.columnSize = columnSize
+		newColumn.columnOffset = offset
+		newColumn.columnIndex = index
+		offset += int(newColumn.columnSize)
+		index += 1
 		t.Columns = append(t.Columns, newColumn)
 	}
 	return t

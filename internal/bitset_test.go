@@ -16,6 +16,7 @@ func TestBitSet(t *testing.T) {
 	myset.setBit(48)
 	myset.setBit(50)
 	myset.setBit(64)
+	myset.setBit(0)
 	myset.clearBit(27)
 
 	require.Equal(t, myset.hasBit(4), true)
@@ -25,4 +26,5 @@ func TestBitSet(t *testing.T) {
 	require.Equal(t, myset.hasBit(48), true)
 	require.Equal(t, myset.hasBit(50), true)
 	require.Equal(t, myset.hasBit(64), true)
+	require.Equal(t, myset.hasBit(0), true)
 }
