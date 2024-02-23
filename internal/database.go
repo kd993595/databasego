@@ -130,7 +130,7 @@ func (b *Backend) GetTableParams(table Table) (uint64, int64, error) {
 	return uint64(lastPage), int64(rowid), nil
 }
 
-func (b *Backend) CreateTable(q Query) error {
+func (b *Backend) CreateTable(q Query) error { //write code for columns index and offset
 	_, exists := b.checkTableExist(q)
 	if exists {
 		return errors.New("Table already exist")

@@ -9,27 +9,34 @@ import (
 	"sync/atomic"
 )
 
-type PageID struct {
-	tableName string
-	pageNum   uint64
+type BufferPool interface {
+	FetchPage(tablePos int, pageid PageID) *InternalPage
+	DeletePage(tableName string, pageid PageID)
+	GetPageDisk(pageid PageID) (*InternalPage, error) //disk manager
+	InsertData(pageid PageID, data [][]byte) (uint64, error)
+	SelectDataRange(start PageID, end PageID) []*InternalPage
+	Unpin(pageid PageID)
+	Victim() int
 }
 
-func (p *PageID) Equals(other PageID) bool {
-	return p.pageNum == other.pageNum && p.tableName == other.tableName
-}
+type PageID uint64
 
 type InternalPage struct {
 	buf      [PAGESIZE]byte
 	pincount atomic.Int32
 	id       PageID
+	pinned   bool
 }
 
+type pageTable map[PageID]int
+
 type BufferPoolManager struct {
-	slots    [MAXPOOLSIZE]*InternalPage
-	freelist []int
-	mx       sync.Mutex
-	pagemx   sync.RWMutex
-	dir      string
+	slots     [MAXPOOLSIZE]*InternalPage
+	freelist  []int
+	mx        sync.Mutex
+	pagemx    sync.RWMutex
+	dir       string
+	alltables []pageTable
 }
 
 func NewBufferPool(dir string) *BufferPoolManager {
@@ -48,20 +55,26 @@ func NewBufferPool(dir string) *BufferPoolManager {
 
 }
 
-func (b *BufferPoolManager) FetchPage(pageid PageID) *InternalPage {
-	b.pagemx.RLock()
-	defer b.pagemx.RUnlock()
+func (b *BufferPoolManager) FetchPage(tablePos int, pageid PageID) *InternalPage {
 
-	for i, v := range b.slots {
-		if v != nil {
-			if pageid.Equals(v.id) {
-				b.slots[i].pincount.Add(1)
-				return b.slots[i]
-			}
-		}
+	var tablemap pageTable = b.alltables[tablePos]
+	pagepos, ok := tablemap[pageid]
+	if ok {
+		tmppage := b.slots[pagepos]
+		tmppage.pincount.Add(1)
+		return tmppage
 	}
-
+	//getframeid and have to allocate page from bufefr if none free
 	return nil
+}
+
+func (b *BufferPoolManager) GetFrameID() int {
+	if len(b.freelist) > 0 {
+		frameID, newFreeList := b.freelist[0], b.freelist[1:]
+		b.freelist = newFreeList
+		return frameID
+	}
+	//return clockreplacer scan through pages pincount
 }
 
 func (b *BufferPoolManager) GetPageDisk(pageid PageID) (*InternalPage, error) {
