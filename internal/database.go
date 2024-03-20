@@ -80,6 +80,7 @@ func OpenExistingDatabase(dir string) (*Backend, error) {
 		}
 		byteIndex += 4
 		tmpTable := fromBytes(tablePage[byteIndex : byteIndex+int(tableSize)])
+		tmpTable.GenerateFields()
 		byteIndex += int(tableSize)
 		b.tables = append(b.tables, tmpTable)
 	}
@@ -92,6 +93,7 @@ func OpenExistingDatabase(dir string) (*Backend, error) {
 		}
 		b.tables[i].lastPage = n
 		b.tables[i].lastRowId = m
+		b.bufferPool.NewPool(tab.Name, b.dir)
 	}
 
 	return &b, nil
@@ -290,6 +292,7 @@ func (b *Backend) CreateTable(q Query) error { //write code for columns index an
 	newtable.lastRowId = 0
 	b.tables = append(b.tables, newtable)
 	b.writeTablesToDisk()
+	b.bufferPool.NewPool(newtable.Name, b.dir)
 	return nil
 }
 
@@ -300,7 +303,7 @@ func (b *Backend) Insert(q Query) error { //use md5 for checksum
 	}
 
 	allrows := make([][]byte, 0)
-	pageid := PageID{tableName: tableToInsert.Name, pageNum: tableToInsert.lastPage}
+	pageid := PageID(tableToInsert.lastPage)
 	lastrownum := 0
 	for _, val := range q.Inserts {
 		nullColumns := InitializeBitSet(uint64(len(tableToInsert.Columns)))
@@ -376,13 +379,13 @@ func (b *Backend) Insert(q Query) error { //use md5 for checksum
 		allrows = append(allrows, rowInsert)
 	}
 
-	n, err := b.bufferPool.InsertData(pageid, allrows)
+	n, err := b.bufferPool.InsertData(tableToInsert.Name, pageid, allrows)
 	if err != nil {
 		return err
 	}
 	for i := range b.tables {
 		if q.TableName == b.tables[i].Name {
-			b.tables[i].lastPage = n
+			b.tables[i].lastPage = uint64(n)
 			b.tables[i].lastRowId = int64(lastrownum)
 		}
 	}
@@ -453,9 +456,9 @@ func (b *Backend) Select(q Query) (driver.Rows, error) {
 	rowsize := tmpTable.GenerateRowBytes()
 	rowbitset := InitializeBitSet(uint64(bitsetsize))
 
-	startPage := PageID{tableName: tmpTable.Name, pageNum: 0}
-	endPage := PageID{tableName: tmpTable.Name, pageNum: tmpTable.lastPage}
-	pages := b.bufferPool.SelectDataRange(startPage, endPage)
+	startPage := PageID(0)
+	endPage := PageID(tmpTable.lastPage)
+	pages := b.bufferPool.SelectDataRange(tmpTable.Name, startPage, endPage)
 
 	for i, page := range pages {
 		if page == nil {
@@ -484,6 +487,7 @@ func (b *Backend) Select(q Query) (driver.Rows, error) {
 			rows.rows = append(rows.rows, row)
 			offset += int(rowsize) + bitsetsize
 		}
+		b.bufferPool.UnpinPage(tmpTable.Name, page.slotid)
 	}
 
 	return rows, nil

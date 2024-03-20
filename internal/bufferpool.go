@@ -27,12 +27,13 @@ type InternalPage struct {
 	buf      [PAGESIZE]byte
 	pincount atomic.Int32
 	id       PageID
+	slotid   int
 	pinned   bool
 }
 
 type BufferPoolManager struct {
 	dir      string
-	allpools map[string]bufferPool
+	allpools map[string]*bufferPool
 }
 
 type bufferPool struct {
@@ -49,14 +50,14 @@ type bufferPool struct {
 func NewBufferPool(dir string) *BufferPoolManager {
 	newManager := BufferPoolManager{
 		dir:      dir,
-		allpools: make(map[string]bufferPool),
+		allpools: make(map[string]*bufferPool),
 	}
 
 	return &newManager
 }
 
 func (bm *BufferPoolManager) NewPool(tablename string, dir string) {
-	newPool := bufferPool{
+	newPool := &bufferPool{
 		slots:    [MAXPOOLSIZE]*InternalPage{},
 		freelist: make([]int, MAXPOOLSIZE),
 		mxread:   &sync.Mutex{},
@@ -71,6 +72,7 @@ func (bm *BufferPoolManager) NewPool(tablename string, dir string) {
 			buf:      [PAGESIZE]byte{},
 			pincount: atomic.Int32{},
 			id:       0,
+			slotid:   -1,
 			pinned:   false,
 		}
 	}
@@ -84,13 +86,14 @@ func (bm *BufferPoolManager) NewPool(tablename string, dir string) {
 	bm.allpools[tablename] = newPool
 }
 
-func (bm *BufferPoolManager) ManagerFetchPage(tablename string, pageid PageID) (*InternalPage, error) {
-	pool, ok := bm.allpools[tablename]
-	if !ok {
-		return nil, errors.New(fmt.Sprintf("table name: \"%s\" does not exist", tablename))
-	}
-	return pool.FetchPage(pageid), nil
-}
+// func (bm *BufferPoolManager) ManagerFetchPage(tablename string, pageid PageID) (*InternalPage, int, error) {
+// 	pool, ok := bm.allpools[tablename]
+// 	if !ok {
+// 		return nil, -1, fmt.Errorf("table name: \"%s\" does not exist", tablename)
+// 	}
+// 	page, frameid := pool.FetchPage(pageid)
+// 	return page, frameid, nil
+// }
 
 // returns nil if error occured
 func (b *bufferPool) FetchPage(pageid PageID) *InternalPage {
@@ -122,6 +125,7 @@ func (b *bufferPool) GetFrameID(pageid PageID) int {
 		frameID, newFreeList := b.freelist[0], b.freelist[1:]
 		b.freelist = newFreeList
 		b.slots[frameID].pinned = true
+		b.slots[frameID].slotid = frameID
 		return frameID
 	}
 	//return clockreplacer scan through pages pincount
@@ -136,6 +140,7 @@ func (b *bufferPool) GetFrameID(pageid PageID) int {
 
 		}
 		b.slots[frameID].pinned = true
+		b.slots[frameID].slotid = frameID
 		return frameID
 	}
 }
@@ -166,17 +171,25 @@ func (b *bufferPool) Unpin(frameId int) {
 	}
 }
 
+func (b *bufferPool) DeletePage(pageid PageID, frameid int) {
+	b.pagemx.Lock()
+	defer b.pagemx.Unlock()
+
+	delete(b.alltables, pageid)
+	b.freelist = append(b.freelist, frameid)
+}
+
 func (bm *BufferPoolManager) UnpinPage(tablename string, frameid int) {
-	pool, _ := bm.allpools[tablename]
+	pool := bm.allpools[tablename]
 	pool.Unpin(frameid)
 }
 
 // return last page modified
-func (bm *BufferPoolManager) InsertData(tablename string, pageid PageID, data [][]byte) (uint64, error) {
+func (bm *BufferPoolManager) InsertData(tablename string, pageid PageID, data [][]byte) (PageID, error) {
 
 	pool, ok := bm.allpools[tablename]
 	if !ok {
-		return 0, errors.New(fmt.Sprintf("table name: \"%s\" does not exist", tablename))
+		return 0, fmt.Errorf("table name: \"%s\" does not exist", tablename)
 	}
 	pageToModify := pool.FetchPage(pageid)
 	if pageToModify == nil {
@@ -203,13 +216,14 @@ func (bm *BufferPoolManager) InsertData(tablename string, pageid PageID, data []
 			copy(buf[10:26], checksum[:])
 
 			f.Seek(int64(pgNum)*PAGESIZE, 0)
-			_, err = f.Write(buf[:])
+			_, err := f.Write(buf[:])
 			if err != nil {
 				return 0, err
 			}
 			rows = 0
 			pgNum += 1
 			buf = [PAGESIZE]byte{}
+			binary.LittleEndian.PutUint64(buf[:], uint64(pgNum))
 			offset = 26
 		}
 		copy(buf[offset:], data[i])
@@ -221,22 +235,27 @@ func (bm *BufferPoolManager) InsertData(tablename string, pageid PageID, data []
 	copy(buf[2:18], checksum[:])
 	binary.LittleEndian.PutUint16(buf[0:2], uint16(rows))
 
-	f.Seek(int64(pageid.pageNum)*PAGESIZE, 0)
-	_, err = f.Write(buf[:])
-	if err != nil {
-		return 0, err
-	}
-	err = f.Sync()
+	f.Seek(int64(pgNum)*PAGESIZE, 0)
+	_, err := f.Write(buf[:])
 	if err != nil {
 		return 0, err
 	}
 
-	//remove page from bufferpool so next calls read page again (fix later)
-	b.DeletePage(pageid)
+	f.Sync()
 
-	return pgNum, err
+	//deletes page from bufferpool and all data should be written to disk by this point
+	pool.DeletePage(pageid, pageToModify.slotid)
+
+	return pgNum, nil
 }
 
-func (b *BufferPoolManager) SelectDataRange(start, end PageID) []*InternalPage {
-	return nil
+func (bm *BufferPoolManager) SelectDataRange(tablename string, start, end PageID) []*InternalPage {
+	allpages := make([]*InternalPage, end-start)
+
+	pool := bm.allpools[tablename]
+	for i := start; i <= end; i++ {
+		page := pool.FetchPage(i)
+		allpages = append(allpages, page)
+	}
+	return allpages
 }

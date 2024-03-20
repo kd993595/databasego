@@ -87,7 +87,6 @@ func (c *Conn) Query(query string, args []driver.Value) (driver.Rows, error) {
 		return nil, errors.ErrUnsupported
 	}
 
-	//want to return rows struct
 	return nil, nil
 }
 

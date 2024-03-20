@@ -15,9 +15,8 @@ type Table struct {
 	Columns       []Column
 	Name          string
 	lastRowId     int64
-	rowEmptyBytes uint64
-	lastPage      uint64
-	bufferPos     int
+	rowEmptyBytes uint64 //dynamic at runtime
+	lastPage      uint64 //dynamic at runtime
 }
 
 /*
@@ -26,7 +25,7 @@ ColumnType values are define in parser.go
 type Column struct {
 	columnName       string
 	columnType       uint8
-	columnSize       uint8
+	columnSize       uint8 //size of column in database in bytes
 	columnConstraint uint8
 	columnOffset     int
 	columnIndex      int
@@ -109,6 +108,15 @@ func (t *Table) GenerateRowBytes() uint64 {
 		t.rowEmptyBytes = uint64(bytelength)
 	}
 	return t.rowEmptyBytes
+}
+
+func (t *Table) GenerateFields() {
+	offset := 0
+	for i := range t.Columns {
+		t.Columns[i].columnIndex = i
+		t.Columns[i].columnOffset = offset
+		offset += int(t.Columns[i].columnSize)
+	}
 }
 
 func (t *Table) ToString() string {
