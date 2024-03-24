@@ -1,4 +1,4 @@
-package internal
+package databasego
 
 //https://pkg.go.dev/database/sql#Rows
 //https://notes.eatonphil.com/database-basics-a-database-sql-driver.html
@@ -8,8 +8,9 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
-	"io"
 	"os"
+
+	. "github.com/kd993595/fusedb/internal"
 )
 
 // Implements sql driver interface for opening database and returning connection to database
@@ -86,34 +87,4 @@ func (c *Conn) Query(query string, args []driver.Value) (driver.Rows, error) {
 	default:
 		return nil, errors.ErrUnsupported
 	}
-
-	return nil, nil
-}
-
-/*
-Result from sql select statement in driver query
-Must use pointer for interface to be properly implements and allow pointer to struct
-*/
-type Rows struct {
-	columns []string //should be result column holding name and type
-	index   uint64
-	rows    [][]Cell //holds all the values returned from the queries which is slice of array of bytes
-}
-
-func (r *Rows) Columns() []string {
-	return r.columns
-}
-
-func (r *Rows) Close() error {
-	r.index = uint64(len(r.rows))
-	return nil
-}
-
-func (r *Rows) Next(dest []driver.Value) error {
-	if r.index >= uint64(len(r.rows)) {
-		return io.EOF
-	}
-	//not implemented
-
-	return nil
 }

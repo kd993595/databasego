@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	_ "github.com/kd993595/fusedb/internal"
+	_ "github.com/kd993595/fusedb"
 )
 
 // https://github.com/krasun/fbptree
@@ -20,12 +20,6 @@ func main() {
 	defer db.Close()
 
 	fmt.Println("ping 1")
-	err = db.Ping()
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println("ping 2")
 	err = db.Ping()
 	if err != nil {
 		panic(err)

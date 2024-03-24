@@ -3,6 +3,7 @@ package internal
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -31,6 +32,14 @@ type Column struct {
 	columnIndex      int
 }
 
+type ResultColumn struct {
+	Name       string
+	ColumnType uint8
+}
+
+/*
+Contain functions to convert byte slice to appropriate datatype as supported by database
+*/
 type Cell []byte
 
 const (
@@ -129,4 +138,20 @@ func (t *Table) ToString() string {
 		sb.WriteString(fmt.Sprintf("ColumnConstraint: %d\n", col.columnConstraint))
 	}
 	return sb.String()
+}
+
+func (c *Cell) AsInt() int64 {
+	return int64(binary.LittleEndian.Uint64(*c))
+}
+
+func (c *Cell) AsFloat() float64 {
+	return math.Float64frombits(binary.LittleEndian.Uint64(*c))
+}
+
+func (c *Cell) AsBool() bool {
+	return (*c)[0] != 0
+}
+
+func (c *Cell) AsString() string {
+	return string(*c)
 }

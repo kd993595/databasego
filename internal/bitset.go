@@ -6,6 +6,7 @@ import (
 )
 
 // https://stackoverflow.com/questions/23192262/how-would-you-set-and-clear-a-single-bit-in-go
+// TODO: Allocate one more bit for specifying row exists
 type BitSet struct {
 	bytes []byte
 }

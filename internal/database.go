@@ -448,9 +448,9 @@ func (b *Backend) Select(q Query) (driver.Rows, error) {
 		}
 	}
 
-	rows := &Rows{index: 0, columns: []string{}}
+	rows := &Rows{index: 0, columns: []ResultColumn{}}
 	for _, col := range columnsRequest {
-		rows.columns = append(rows.columns, col.columnName)
+		rows.columns = append(rows.columns, ResultColumn{Name: col.columnName, ColumnType: col.columnType})
 	}
 	rows.rows = make([][]Cell, 0)
 	rowsize := tmpTable.GenerateRowBytes()
