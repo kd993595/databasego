@@ -86,7 +86,6 @@ func OpenExistingDatabase(dir string) (*Backend, error) {
 	}
 
 	for i, tab := range b.tables {
-		fmt.Println(tab.ToString()) //debugging table info
 		n, m, err := b.GetTableParams(tab)
 		if err != nil {
 			return nil, err
@@ -100,7 +99,7 @@ func OpenExistingDatabase(dir string) (*Backend, error) {
 }
 
 func (b *Backend) GetTableParams(table Table) (uint64, int64, error) {
-	tabledir := filepath.Join(b.dir, table.Name, ".db")
+	tabledir := filepath.Join(b.dir, fmt.Sprintf("%s.db", table.Name))
 	f, err := os.Open(tabledir)
 	if err != nil {
 		return 0, 0, err
@@ -132,7 +131,7 @@ func (b *Backend) GetTableParams(table Table) (uint64, int64, error) {
 	return uint64(lastPage), int64(rowid), nil
 }
 
-func (b *Backend) CreateTable(q Query) error { //write code for columns index and offset
+func (b *Backend) CreateTable(q Query) error { //rewrite
 	_, exists := b.checkTableExist(q)
 	if exists {
 		return errors.New("Table already exist")
@@ -290,13 +289,14 @@ func (b *Backend) CreateTable(q Query) error { //write code for columns index an
 
 	newtable.lastPage = 0
 	newtable.lastRowId = 0
+	newtable.GenerateFields()
 	b.tables = append(b.tables, newtable)
 	b.writeTablesToDisk()
 	b.bufferPool.NewPool(newtable.Name, b.dir)
 	return nil
 }
 
-func (b *Backend) Insert(q Query) error { //use md5 for checksum
+func (b *Backend) Insert(q Query) error {
 	tableToInsert, ok := b.checkTableExist(q)
 	if !ok {
 		return errors.New("Table does not exist")
@@ -304,78 +304,95 @@ func (b *Backend) Insert(q Query) error { //use md5 for checksum
 
 	allrows := make([][]byte, 0)
 	pageid := PageID(tableToInsert.lastPage)
-	lastrownum := 0
-	for _, val := range q.Inserts {
-		nullColumns := InitializeBitSet(uint64(len(tableToInsert.Columns)))
-		rowInsert := make([]byte, tableToInsert.GenerateRowBytes()+nullColumns.Size())
+	lastrownum := tableToInsert.lastRowId
+	insertColumns := make([]InsertColumn, len(tableToInsert.Columns))
+	queryCols := make([]string, len(q.Fields))
+	copy(queryCols, q.Fields)
 
+	for i, col := range tableToInsert.Columns {
+		insertColumns[i].columnSize = col.columnSize
+		insertColumns[i].dataType = col.columnType
+		isNull := true
+		for j := range queryCols {
+			if queryCols[j] == col.columnName {
+				queryCols = removeColField(queryCols, j)
+				isNull = false
+				insertColumns[i].insertIndex = j
+				break
+			}
+		}
+		if isNull && col.columnConstraint == COL_ROWID { //supposes primary key is rowid
+			insertColumns[i].colType = COL_I_PRIMARYNULL
+		} else if !isNull && col.columnConstraint == COL_ROWID {
+			insertColumns[i].colType = COL_I_PRIMARYVALUED
+		} else if isNull {
+			insertColumns[i].colType = COL_I_NULL
+		} else if !isNull {
+			insertColumns[i].colType = COL_I_VALUED
+		}
+	}
+	if len(queryCols) > 0 {
+		return fmt.Errorf("Columns may not exist: %s", strings.Join(queryCols, " - "))
+	}
+
+	for _, val := range q.Inserts {
+		nullColumns := InitializeBitSet(uint64(len(tableToInsert.Columns) + 1))
+		nullColumns.setBit(len(tableToInsert.Columns) + 1)
+		rowInsert := make([]byte, 0, tableToInsert.GenerateRowBytes()+nullColumns.Size())
 		byteIndex := nullColumns.Size()
-		columnsAdded := 0
-		for j, col := range tableToInsert.Columns {
-			previous := columnsAdded
-			for i := 0; i < len(val); i++ {
-				if col.columnName != val[i] {
-					continue
+
+		for j := range insertColumns {
+			var b []byte = make([]byte, 0)
+
+			if insertColumns[j].colType == COL_I_PRIMARYVALUED {
+				n, err := strconv.Atoi(val[insertColumns[j].insertIndex])
+				if err != nil {
+					return errors.Join(errors.New("Insert Query failed: "), err)
 				}
-				if col.columnConstraint == COL_ROWID {
-					n, err := strconv.Atoi(val[i])
-					if err != nil {
-						return errors.Join(errors.New("Insert Query failed: "), err)
-					}
-					lastrownum = n
-				}
-				var b []byte = make([]byte, 0)
-				switch col.columnType {
+				lastrownum = int64(n)
+				b = binary.LittleEndian.AppendUint64(b, uint64(n))
+			} else if insertColumns[j].colType == COL_I_PRIMARYNULL {
+				n := lastrownum + 1
+				b = binary.LittleEndian.AppendUint64(b, uint64(n))
+			} else if insertColumns[j].colType == COL_I_VALUED {
+				switch insertColumns[j].dataType {
 				case INT:
-					n, err := strconv.Atoi(val[i])
+					n, err := strconv.Atoi(val[insertColumns[j].insertIndex])
 					if err != nil {
 						return errors.Join(errors.New("Insert Query failed: "), err)
 					}
 					b = binary.LittleEndian.AppendUint64(b, uint64(n))
 				case FLOAT:
-					n, err := strconv.ParseFloat(val[i], 64)
+					n, err := strconv.ParseFloat(val[insertColumns[j].insertIndex], 64)
 					if err != nil {
 						return errors.Join(errors.New("Insert Query failed: "), err)
 					}
 					b = binary.LittleEndian.AppendUint64(b, math.Float64bits(n))
 				case BOOL:
-					n, err := strconv.ParseBool(val[i])
+					n, err := strconv.ParseBool(val[insertColumns[j].insertIndex])
 					if err != nil {
 						return errors.Join(errors.New("Insert Query failed: "), err)
 					}
 					if n {
 						b = append(b, byte(1))
 					} else {
-						b = append(b, byte(1))
+						b = append(b, byte(0))
 					}
 				case CHAR:
-					n := []byte(val[i])
-					if len(n) > int(col.columnSize) {
+					n := []byte(val[insertColumns[j].insertIndex])
+					if len(n) > int(insertColumns[j].columnSize) {
 						return errors.Join(errors.New("Insert Query failed: "), errors.New("string to insert larger than allowed"))
 					}
 					b = append(b, n...)
 				}
-				copy(rowInsert[byteIndex:byteIndex+uint64(col.columnSize)], b)
-				columnsAdded += 1
+			} else if insertColumns[j].colType == COL_I_NULL {
+				nullColumns.setBit(j)
 			}
-			if previous == columnsAdded {
-				//no columns added
-				if col.columnConstraint == COL_ROWID {
-					n := tableToInsert.lastRowId + 1
-					b := make([]byte, 8)
-					binary.LittleEndian.PutUint64(b, uint64(n))
-					copy(rowInsert[byteIndex:byteIndex+uint64(col.columnSize)], b)
-					lastrownum = int(n)
-				} else {
-					nullColumns.setBit(j)
-				}
-			}
-			byteIndex += uint64(col.columnSize)
+
+			copy(rowInsert[byteIndex:], b)
+			byteIndex += uint64(insertColumns[j].columnSize)
 		}
 		copy(rowInsert[0:], nullColumns.bytes)
-		if columnsAdded != len(val) {
-			return errors.New("at Insert: columns given some may not exist failed insert")
-		}
 		allrows = append(allrows, rowInsert)
 	}
 

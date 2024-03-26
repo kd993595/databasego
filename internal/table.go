@@ -3,7 +3,6 @@ package internal
 import (
 	"encoding/binary"
 	"fmt"
-	"math"
 	"strings"
 )
 
@@ -19,36 +18,6 @@ type Table struct {
 	rowEmptyBytes uint64 //dynamic at runtime
 	lastPage      uint64 //dynamic at runtime
 }
-
-/*
-ColumnType values are define in parser.go
-*/
-type Column struct {
-	columnName       string
-	columnType       uint8
-	columnSize       uint8 //size of column in database in bytes
-	columnConstraint uint8
-	columnOffset     int
-	columnIndex      int
-}
-
-type ResultColumn struct {
-	Name       string
-	ColumnType uint8
-}
-
-/*
-Contain functions to convert byte slice to appropriate datatype as supported by database
-*/
-type Cell []byte
-
-const (
-	COL_UNIQUE = iota + 1
-	COL_NOTNULL
-	COL_NOTNULLUNIQUE
-	COL_PRIMARY
-	COL_ROWID
-)
 
 func (t *Table) toBytes() []byte {
 	buf := make([]byte, 0)
@@ -138,20 +107,4 @@ func (t *Table) ToString() string {
 		sb.WriteString(fmt.Sprintf("ColumnConstraint: %d\n", col.columnConstraint))
 	}
 	return sb.String()
-}
-
-func (c *Cell) AsInt() int64 {
-	return int64(binary.LittleEndian.Uint64(*c))
-}
-
-func (c *Cell) AsFloat() float64 {
-	return math.Float64frombits(binary.LittleEndian.Uint64(*c))
-}
-
-func (c *Cell) AsBool() bool {
-	return (*c)[0] != 0
-}
-
-func (c *Cell) AsString() string {
-	return string(*c)
 }

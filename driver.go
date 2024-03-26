@@ -15,6 +15,7 @@ import (
 
 // Implements sql driver interface for opening database and returning connection to database
 type Driver struct {
+	bkd *Backend
 }
 
 func init() {
@@ -23,21 +24,26 @@ func init() {
 
 func (d *Driver) Open(name string) (driver.Conn, error) {
 	//fmt.Println(name)
-	_, err := os.Stat(name)
-	if os.IsNotExist(err) {
-		err = os.Mkdir(name, 0755) //https://stackoverflow.com/questions/14249467/os-mkdir-and-os-mkdirall-permissions
+
+	if d.bkd == nil {
+		_, err := os.Stat(name)
+		if os.IsNotExist(err) {
+			err = os.Mkdir(name, 0755) //https://stackoverflow.com/questions/14249467/os-mkdir-and-os-mkdirall-permissions
+			if err != nil {
+				return nil, err
+			}
+
+			d.bkd = CreateNewDatabase(name)
+		}
+
+		tempdb, err := OpenExistingDatabase(name)
 		if err != nil {
 			return nil, err
 		}
-
-		return &Conn{CreateNewDatabase(name)}, nil
+		d.bkd = tempdb
 	}
 
-	tempdb, err := OpenExistingDatabase(name)
-	if err != nil {
-		return nil, err
-	}
-	return &Conn{tempdb}, nil
+	return &Conn{d.bkd}, nil
 }
 
 // Connection to the database

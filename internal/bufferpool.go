@@ -76,7 +76,7 @@ func (bm *BufferPoolManager) NewPool(tablename string, dir string) {
 			pinned:   false,
 		}
 	}
-	filePathStr := filepath.Join(dir, tablename, ".db")
+	filePathStr := filepath.Join(dir, fmt.Sprintf("%s.db", tablename))
 	_, err := os.Stat(filePathStr)
 	if err != nil {
 		os.Create(filePathStr)
