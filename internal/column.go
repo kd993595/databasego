@@ -22,7 +22,7 @@ ColumnType values are define in parser.go
 */
 type Column struct {
 	columnName       string
-	columnType       uint8
+	columnType       uint8 //data type
 	columnSize       uint8 //size of column in database in bytes
 	columnConstraint uint8
 	columnOffset     int

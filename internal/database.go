@@ -315,15 +315,21 @@ func (b *Backend) Insert(q Query) error {
 		isNull := true
 		for j := range queryCols {
 			if queryCols[j] == col.columnName {
-				queryCols = removeColField(queryCols, j)
 				isNull = false
-				insertColumns[i].insertIndex = j
+
+				for k := range q.Fields {
+					if col.columnName == q.Fields[k] {
+						break
+					}
+					insertColumns[i].insertIndex++
+				}
+				queryCols = removeColField(queryCols, j)
 				break
 			}
 		}
-		if isNull && col.columnConstraint == COL_ROWID { //supposes primary key is rowid
+		if isNull && col.columnConstraint == COL_PRIMARY { //supposes primary key is rowid
 			insertColumns[i].colType = COL_I_PRIMARYNULL
-		} else if !isNull && col.columnConstraint == COL_ROWID {
+		} else if !isNull && col.columnConstraint == COL_PRIMARY {
 			insertColumns[i].colType = COL_I_PRIMARYVALUED
 		} else if isNull {
 			insertColumns[i].colType = COL_I_NULL
@@ -338,7 +344,7 @@ func (b *Backend) Insert(q Query) error {
 	for _, val := range q.Inserts {
 		nullColumns := InitializeBitSet(uint64(len(tableToInsert.Columns) + 1))
 		nullColumns.setBit(len(tableToInsert.Columns) + 1)
-		rowInsert := make([]byte, 0, tableToInsert.GenerateRowBytes()+nullColumns.Size())
+		rowInsert := make([]byte, tableToInsert.GenerateRowBytes()+nullColumns.Size())
 		byteIndex := nullColumns.Size()
 
 		for j := range insertColumns {
@@ -446,7 +452,6 @@ func (b *Backend) Select(q Query) (driver.Rows, error) {
 	}
 
 	columnsRequest := []Column{}
-	bitsetsize := (len(tmpTable.Columns) + 8 - 1) / 8
 	tmpcol := q.Fields
 	if tmpcol[0] == "*" {
 		columnsRequest = append(columnsRequest, tmpTable.Columns...)
@@ -471,42 +476,57 @@ func (b *Backend) Select(q Query) (driver.Rows, error) {
 	}
 	rows.rows = make([][]Cell, 0)
 	rowsize := tmpTable.GenerateRowBytes()
-	rowbitset := InitializeBitSet(uint64(bitsetsize))
+	rowbitset := InitializeBitSet(uint64(len(tmpTable.Columns) + 1))
+	bitsetsize := int(rowbitset.Size())
 
 	startPage := PageID(0)
 	endPage := PageID(tmpTable.lastPage)
 	pages := b.bufferPool.SelectDataRange(tmpTable.Name, startPage, endPage)
 
 	for i, page := range pages {
-		if page == nil {
-			return nil, fmt.Errorf("page %d has been corrupted", i)
-		}
 		rowNums := binary.LittleEndian.Uint16(page.buf[8:10])
 		checksum := page.buf[10:26]
 
 		checksumcheck := md5.Sum(page.buf[26:])
+		//fmt.Println(checksum, checksumcheck)
 		if !bytes.Equal(checksum, checksumcheck[:]) {
 			return nil, fmt.Errorf("page %d has been corrupted", i)
 		}
 		offset := 26
-		for j := 0; j < int(rowNums); j++ {
+		numrows := 0
+		for ; offset < PAGESIZE-(int(rowsize)+bitsetsize); offset += (int(rowsize) + bitsetsize) {
 			row := make([]Cell, len(columnsRequest))
-			tmprow := page.buf[offset : rowsize+uint64(bitsetsize)]
+			tmprow := page.buf[offset : uint64(offset)+rowsize+uint64(bitsetsize)]
 			rowbitset.fromBytes(tmprow[:bitsetsize])
+			//fmt.Println(rowbitset.hasBit(len(tmpTable.Columns) + 1))
+			if !rowbitset.hasBit(len(tmpTable.Columns) + 1) {
+				continue
+			}
+
 			for k, col := range columnsRequest {
 				if rowbitset.hasBit(col.columnIndex) {
 					row[k] = nil
 					continue
 				}
 				celloffset := bitsetsize + col.columnOffset
-				row[k] = tmprow[celloffset : celloffset+int(col.columnSize)]
+				row[k] = make(Cell, col.columnSize)
+				copy(row[k], tmprow[celloffset:])
 			}
 			rows.rows = append(rows.rows, row)
-			offset += int(rowsize) + bitsetsize
+
+			numrows++
+			if numrows >= int(rowNums) {
+				break
+			}
 		}
 		b.bufferPool.UnpinPage(tmpTable.Name, page.slotid)
 	}
 
+	for i := range rows.rows {
+		fmt.Println(rows.rows[i])
+	}
+	fmt.Println(len(rows.Columns()), rows.Columns())
+	fmt.Println(len(rows.columns), rows.columns)
 	return rows, nil
 }
 

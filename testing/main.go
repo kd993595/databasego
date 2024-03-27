@@ -30,6 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Println("Create Query passed")
 
 	_, err = db.Query("INSERT INTO 'MyTable10' (column1,name,column30,column400) VALUES ('1','somecharss', 'true','1.23')")
 	if err != nil {
@@ -45,11 +46,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Println("Insert Queries passed")
 
 	rows, err := db.Query("SELECT * FROM 'MyTable10'")
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Println("Select Query passed")
 
 	for rows.Next() {
 		var i int

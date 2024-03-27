@@ -17,7 +17,7 @@ type Rows struct {
 }
 
 func (r *Rows) Columns() []string {
-	columnString := make([]string, len(r.columns))
+	columnString := make([]string, 0, len(r.columns))
 	for _, c := range r.columns {
 		columnString = append(columnString, c.Name)
 	}

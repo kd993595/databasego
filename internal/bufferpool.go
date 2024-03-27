@@ -205,13 +205,13 @@ func (bm *BufferPoolManager) InsertData(tablename string, pageid PageID, data []
 	//checksum := buf[10:26]
 
 	offset := 26 + int(rowNums)*len(data[0])
-	rows := 0
+
 	pgNum := pageid
 	for i := range data {
 		if offset+len(data[i]) > PAGESIZE {
 			//create new page and write old page
 			binary.LittleEndian.PutUint64(buf[0:8], uint64(pgNum))
-			binary.LittleEndian.PutUint16(buf[8:10], uint16(rows)+rowNums)
+			binary.LittleEndian.PutUint16(buf[8:10], rowNums)
 			checksum := md5.Sum(buf[26:])
 			copy(buf[10:26], checksum[:])
 
@@ -220,7 +220,7 @@ func (bm *BufferPoolManager) InsertData(tablename string, pageid PageID, data []
 			if err != nil {
 				return 0, err
 			}
-			rows = 0
+			rowNums = 0
 			pgNum += 1
 			buf = [PAGESIZE]byte{}
 			binary.LittleEndian.PutUint64(buf[:], uint64(pgNum))
@@ -228,12 +228,13 @@ func (bm *BufferPoolManager) InsertData(tablename string, pageid PageID, data []
 		}
 		copy(buf[offset:], data[i])
 		offset += len(data[0])
-		rows += 1
+		rowNums += 1
+		fmt.Println("another row")
 	}
 
 	checksum := md5.Sum(buf[26:])
-	copy(buf[2:18], checksum[:])
-	binary.LittleEndian.PutUint16(buf[0:2], uint16(rows))
+	copy(buf[10:26], checksum[:])
+	binary.LittleEndian.PutUint16(buf[8:10], rowNums)
 
 	f.Seek(int64(pgNum)*PAGESIZE, 0)
 	_, err := f.Write(buf[:])
@@ -250,7 +251,7 @@ func (bm *BufferPoolManager) InsertData(tablename string, pageid PageID, data []
 }
 
 func (bm *BufferPoolManager) SelectDataRange(tablename string, start, end PageID) []*InternalPage {
-	allpages := make([]*InternalPage, end-start)
+	allpages := make([]*InternalPage, 0, end-start)
 
 	pool := bm.allpools[tablename]
 	for i := start; i <= end; i++ {
